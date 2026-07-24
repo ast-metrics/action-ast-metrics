@@ -1,27 +1,32 @@
 name: Test
 
-on: [push]
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   test:
-    runs-on: "ubuntu-latest"
-    steps:  
-        - uses: actions/checkout@v4
-        - uses: ./
-          with:
-            months: 2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-        - name: Assertions
-          shell: bash
-          run: |
-            # Ensure archives were generated
-            if [ ! -d archives ]; then
-                echo "Archives not found"
-                exit 1
-            fi
+      - uses: ./
 
-            # Ensure archives are not empty 
-            if [ ! "$(ls -A archives)" ]; then
-                echo "Archives are empty"
-                exit 1
-            fi
+      - name: Assertions
+        shell: bash
+        run: |
+          set -e
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+              # Review mode must have produced its reports
+              test -f "${RUNNER_TEMP}/ast-metrics-review.md"
+              test -f "${RUNNER_TEMP}/ast-metrics-review.json"
+              grep -q "methodologyVersion" "${RUNNER_TEMP}/ast-metrics-review.json"
+          else
+              # Full analysis mode must have produced the HTML report
+              test -d "${RUNNER_TEMP}/ast-metrics-html-report"
+          fi

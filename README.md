@@ -1,51 +1,98 @@
-# ast-action
+# AST Metrics GitHub Action
 
-> Github action for [AST Metrics](https://github.com/Halleck45/ast-metrics/)
+> Prevent architectural regressions in your pull requests, powered by [AST Metrics](https://github.com/Halleck45/ast-metrics/).
 
-This will automatically add a markdown report to your build, containing metrics about your project (e.g. maintainability, complexity, etc.)
+On each pull request, this action compares your branch with the target branch and reports **only new or worsened issues**: existing debt is never reported. Typical findings:
 
-An artifact will also be created, containing the detailed HTML report.
+- a method that became too complex;
+- a strong maintainability drop on modified code;
+- a significant coupling increase on a modified file;
+- new violations of your configured architecture rules (e.g. forbidden dependencies);
+- notable improvements, so the report is not only negative.
 
-## Example
+On `push` events, the action runs a full analysis and publishes the report in the job summary, with the HTML report as an artifact (same behavior as v1).
 
-On each build, you will get something like this:
-
-![Example](./docs/preview.png)
-
-You will find [live example here](https://github.com/Halleck45/DesignPatternDetector/actions/runs/8293499298) (if the build is still available).
+Analysis runs entirely on the runner: no account, no code sent anywhere.
 
 ## Usage
 
-Create a `.github/workflows/ast-metrics.yml` file with the following content:
+Create `.github/workflows/ast-metrics.yml`:
 
 ```yaml
 name: AST Metrics
-on: [push]
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write   # optional: allows the action to comment on the pull request
+
 jobs:
-  build:
+  ast-metrics:
     runs-on: ubuntu-latest
     steps:
-        - name: AST Metrics
-          uses: halleck45/action-ast-metrics@v1.0.3
+      - uses: halleck45/action-ast-metrics@v2
 ```
+
+That's it. Each pull request gets a check with a short, stable summary:
+
+```text
+AST Metrics: quality gate passed
+
+3 file(s) changed, 0 new critical issue(s), 2 other regression(s)
+
+Regressions:
+- [MEDIUM] CheckoutService::pay (src/Checkout/CheckoutService.php:42)
+      Cyclomatic complexity: 8 -> 15 (threshold: 10)
+      Suggested action: Extract smaller, well-named functions to reduce decision points
+
+Existing debt is not reported. Methodology v1.0
+```
+
+## Permissions
+
+The action degrades gracefully depending on the permissions you grant:
+
+| Feature | Required permission | Behavior when missing |
+|---|---|---|
+| Check status and job summary | none | always works, including pull requests from forks |
+| Pull request comment | `pull-requests: write` | skipped with a notice; the report stays in the job summary |
+| SARIF upload (`sarif: true`) | `security-events: write` (and GitHub Advanced Security on private repositories) | skipped without failing the build |
+
+Note: pull requests coming from forks always run with a read-only token; the comment is skipped and the job summary is used instead.
 
 ## Inputs
 
-+ `version`: The version of AST Metrics to use. Default: `latest`
+| Input | Default | Description |
+|---|---|---|
+| `version` | `latest` | AST Metrics version to install. Pinning (e.g. `v0.28.0`) is recommended for reproducible checks. |
+| `directory` | `.` | Directory to analyze. |
+| `base` | base branch of the PR | Git reference to compare with. |
+| `fail-on` | `never` | Fail the check when a regression of at least this severity is introduced: `high`, `medium`, `any` or `never`. |
+| `comment` | `true` | Post and update a single comment on the pull request (best effort). |
+| `sarif` | `false` | Upload regressions to GitHub code scanning. |
+| `html-artifact` | `auto` | Upload the full HTML report as an artifact: `true` on push, `false` on pull requests by default. |
+| `max-findings` | `5` | Maximum number of regressions displayed in the summary and the comment. |
+
+### Blocking mode
+
+Start in informative mode (the default), then make the gate blocking once the team trusts the signal:
 
 ```yaml
-- uses: halleck45/action-ast-metrics@v1.0.3
+- uses: halleck45/action-ast-metrics@v2
   with:
-    version: 'v0.0.0-alpha'
+    fail-on: high
 ```
 
-+ `directory`: The directory to analyze. Default: `.`
+### Architecture rules
 
-```yaml
-- uses: halleck45/action-ast-metrics@v1.0.3
-  with:
-    directory: 'src'
-```
+If your repository has an `.ast-metrics.yaml` configuration with requirements (forbidden dependencies, complexity budgets...), the review also reports **new** violations introduced by the pull request, and only those.
+
+## Migrating from v1
+
+- The `push` behavior is unchanged (full analysis, job summary, HTML artifact).
+- `report_html_directory` and `report_markdown_filename` inputs were removed; reports are now written to the runner temporary directory and published as summary or artifact.
+- New pull request mode: add `pull_request:` to your workflow triggers to enable it.
 
 ## License
 

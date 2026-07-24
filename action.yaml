@@ -1,95 +1,215 @@
 name: 'AST Metrics analysis'
-description: 'Runs AST Metrics analysis on your project'
+description: 'Prevent architectural regressions: analyzes pull requests and reports only new or worsened issues. Full analysis on push.'
 author: 'Jean-François Lépine'
 branding:
   icon: bar-chart
   color: blue
-runs:
-  using: 'composite'
-  
-  steps:
-
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Analyse
-      run: |
-        #!/bin/sh -l
-        set -e
-
-        # get version
-        if [ -z "${AST_METRICS_VERSION}" ]; then
-            # default to latest
-            AST_METRICS_VERSION="latest"
-        fi
-
-        if [ "${AST_METRICS_VERSION}" = "latest" ]; then
-            # get latest version from github
-            VERSION=$(curl -s https://api.github.com/repos/halleck45/ast-metrics/releases/latest|grep tag_name|cut -d '"' -f 4)
-        else
-            # remove starting v if present
-            AST_METRICS_VERSION=$(echo ${AST_METRICS_VERSION} | sed 's/^v//')
-            VERSION=v{AST_METRICS_VERSION}
-        fi
-
-        # download and install
-        curl -L https://github.com/Halleck45/ast-metrics/releases/download/${VERSION}/ast-metrics_Linux_x86_64 -o /usr/local/bin/ast-metrics
-        chmod +x /usr/local/bin/ast-metrics
-
-        # analyze
-        if [[ -z "${DIRECTORY_TO_ANALYZE}" ]]; then
-            echo "No path provided, using current directory"
-            DIRECTORY_TO_ANALYZE="."
-        fi
-
-        if [[ -z "${REPORT_HTML_DIRECTORY}" ]]; then
-            REPORT_HTML_DIRECTORY="ast-metrics-report"
-        fi
-
-        if [[ -z "${REPORT_MARKDOWN_FILENAME}" ]]; then
-            REPORT_MARKDOWN_FILENAME="ast-metrics-report.md"
-        fi
-
-        # run
-        /usr/local/bin/ast-metrics analyze \
-            --non-interactive \
-            --report-html=${REPORT_HTML_DIRECTORY} \
-            --report-markdown=${REPORT_MARKDOWN_FILENAME} \
-            "${DIRECTORY_TO_ANALYZE}"
-
-        echo Finished
-      shell: bash
-      env:
-        AST_METRICS_VERSION: ${{ inputs.version }}
-        DIRECTORY_TO_ANALYZE: ${{ inputs.directory }}
-        REPORT_HTML_DIRECTORY: ${{ inputs.report_html_directory }}
-        REPORT_MARKDOWN_FILENAME: ${{ inputs.report_markdown_filename }}
-
-    - name: Adding markdown
-      shell: bash
-      run: cat ${{ inputs.report_markdown_filename }} >> $GITHUB_STEP_SUMMARY
-      
-    - name: Upload artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: ${{ inputs.report_html_directory }}
-        name: 'AST Metrics HTML report'
-
 
 inputs:
   version:
-    description: 'Version of AST Metrics to use'
+    description: 'Version of AST Metrics to use (e.g. v0.28.0). Pinning a version is recommended for reproducible checks.'
     required: false
     default: 'latest'
   directory:
     description: 'Directory to analyze'
     required: false
     default: '.'
-  report_html_directory:
-    description: 'Directory to deploy the report'
+  base:
+    description: 'Git reference to compare the pull request with. Default: the base branch of the pull request.'
     required: false
-    default: 'ast-metrics-report'
-  report_markdown_filename:
-    description: Filename to save the markdown report.
+    default: ''
+  fail-on:
+    description: 'Fail the check when a regression of at least this severity is introduced: high, medium, any or never. Default: never (informative mode).'
     required: false
-    default: 'ast-metrics-report.md'
+    default: 'never'
+  comment:
+    description: 'Post (and update) a single review comment on the pull request. Best effort: requires the pull-requests: write permission; silently falls back to the job summary otherwise (e.g. pull requests from forks).'
+    required: false
+    default: 'true'
+  sarif:
+    description: 'Upload regressions to GitHub code scanning as SARIF. Requires the security-events: write permission, and GitHub Advanced Security on private repositories.'
+    required: false
+    default: 'false'
+  html-artifact:
+    description: 'Upload the full HTML report as a build artifact. Default: true on push, false on pull requests (auto).'
+    required: false
+    default: 'auto'
+  max-findings:
+    description: 'Maximum number of regressions displayed in the summary and the comment'
+    required: false
+    default: '5'
+
+runs:
+  using: 'composite'
+  steps:
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        # Full history so the review can compute the merge-base with the target branch
+        fetch-depth: 0
+
+    - name: Install AST Metrics
+      shell: bash
+      env:
+        AST_METRICS_VERSION: ${{ inputs.version }}
+      run: |
+        set -e
+        if [ -z "${AST_METRICS_VERSION}" ] || [ "${AST_METRICS_VERSION}" = "latest" ]; then
+            VERSION=$(curl -s https://api.github.com/repos/halleck45/ast-metrics/releases/latest | grep tag_name | cut -d '"' -f 4)
+        else
+            VERSION="v$(echo "${AST_METRICS_VERSION}" | sed 's/^v//')"
+        fi
+        case "$(uname -m)" in
+            aarch64|arm64) ARCH="arm64" ;;
+            *) ARCH="x86_64" ;;
+        esac
+        echo "Installing AST Metrics ${VERSION} (${ARCH})"
+        curl -fsSL "https://github.com/Halleck45/ast-metrics/releases/download/${VERSION}/ast-metrics_Linux_${ARCH}" -o /usr/local/bin/ast-metrics
+        chmod +x /usr/local/bin/ast-metrics
+
+    # ------------------------------------------------------------------
+    # Pull request: differential review (only new or worsened issues)
+    # ------------------------------------------------------------------
+
+    - name: Review pull request
+      id: review
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        DIRECTORY_TO_ANALYZE: ${{ inputs.directory }}
+        BASE_REF: ${{ inputs.base != '' && inputs.base || github.base_ref }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        MAX_FINDINGS: ${{ inputs.max-findings }}
+        WITH_SARIF: ${{ inputs.sarif }}
+      run: |
+        set -e
+        git fetch origin "${BASE_REF}" --quiet || true
+
+        SARIF_FLAG=""
+        if [ "${WITH_SARIF}" = "true" ]; then
+            SARIF_FLAG="--report-sarif=${RUNNER_TEMP}/ast-metrics-review.sarif"
+        fi
+
+        set +e
+        ast-metrics review \
+            --base "origin/${BASE_REF}" \
+            --fail-on "${FAIL_ON}" \
+            --max-findings "${MAX_FINDINGS}" \
+            --report-markdown "${RUNNER_TEMP}/ast-metrics-review.md" \
+            --report-json "${RUNNER_TEMP}/ast-metrics-review.json" \
+            ${SARIF_FLAG} \
+            "${DIRECTORY_TO_ANALYZE}"
+        CODE=$?
+        set -e
+
+        if [ ! -f "${RUNNER_TEMP}/ast-metrics-review.md" ]; then
+            echo "::error::AST Metrics review failed before producing a report"
+            exit "${CODE}"
+        fi
+
+        # Publish the summary now; the quality gate verdict is enforced at the end,
+        # after the comment and SARIF steps had a chance to run.
+        cat "${RUNNER_TEMP}/ast-metrics-review.md" >> "$GITHUB_STEP_SUMMARY"
+        echo "exit-code=${CODE}" >> "$GITHUB_OUTPUT"
+
+    - name: Comment pull request (best effort)
+      if: (github.event_name == 'pull_request') && inputs.comment == 'true'
+      continue-on-error: true
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- ast-metrics-review -->';
+          const report = fs.readFileSync(`${process.env.RUNNER_TEMP}/ast-metrics-review.md`, 'utf8');
+          const body = `${marker}\n${report}`;
+          try {
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+          } catch (error) {
+            if (error.status === 403 || error.status === 404) {
+              core.notice('AST Metrics could not comment on this pull request (read-only token, e.g. fork pull request or restricted workflow permissions). The report is available in the job summary. To enable comments, add "permissions: pull-requests: write" to the workflow.');
+            } else {
+              throw error;
+            }
+          }
+
+    - name: Upload SARIF to code scanning
+      if: (github.event_name == 'pull_request') && inputs.sarif == 'true'
+      continue-on-error: true
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ runner.temp }}/ast-metrics-review.sarif
+        category: ast-metrics
+
+    - name: Upload HTML report (pull request, optional)
+      if: (github.event_name == 'pull_request') && inputs.html-artifact == 'true'
+      shell: bash
+      env:
+        DIRECTORY_TO_ANALYZE: ${{ inputs.directory }}
+      run: |
+        set -e
+        ast-metrics analyze --non-interactive --report-html="${RUNNER_TEMP}/ast-metrics-html-report" "${DIRECTORY_TO_ANALYZE}"
+
+    - name: Upload HTML report artifact (pull request, optional)
+      if: (github.event_name == 'pull_request') && inputs.html-artifact == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ast-metrics-report
+        path: ${{ runner.temp }}/ast-metrics-html-report
+
+    - name: Enforce quality gate
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        CODE: ${{ steps.review.outputs.exit-code }}
+      run: |
+        if [ "${CODE}" != "0" ]; then
+            echo "::error::AST Metrics quality gate failed (fail-on: ${{ inputs.fail-on }}). See the job summary for details."
+            exit 1
+        fi
+
+    # ------------------------------------------------------------------
+    # Push and other events: full analysis (v1 behavior)
+    # ------------------------------------------------------------------
+
+    - name: Analyze
+      if: github.event_name != 'pull_request'
+      shell: bash
+      env:
+        DIRECTORY_TO_ANALYZE: ${{ inputs.directory }}
+      run: |
+        set -e
+        ast-metrics analyze \
+            --non-interactive \
+            --report-html="${RUNNER_TEMP}/ast-metrics-html-report" \
+            --report-markdown="${RUNNER_TEMP}/ast-metrics-report.md" \
+            "${DIRECTORY_TO_ANALYZE}"
+        cat "${RUNNER_TEMP}/ast-metrics-report.md" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload HTML report artifact
+      if: github.event_name != 'pull_request' && inputs.html-artifact != 'false'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ast-metrics-report
+        path: ${{ runner.temp }}/ast-metrics-html-report
