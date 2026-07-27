@@ -31,7 +31,7 @@ inputs:
     required: false
     default: 'false'
   sarif-max-level:
-    description: 'Ceiling for the level of the SARIF results: error, warning or note. Default: warning, because code scanning fails its own pull request check as soon as a new error level alert appears in the diff, whatever fail-on says. Set to error to let code scanning block the pull request on high severity regressions. Ignored by AST Metrics releases that predate the option.'
+    description: 'Ceiling for the level of the SARIF results: error, warning or note. Default: warning, because code scanning fails its own pull request check as soon as a new error level alert appears in the diff, whatever fail-on says. Set to error to let code scanning block the pull request on high severity regressions.'
     required: false
     default: 'warning'
   annotations:
@@ -110,13 +110,7 @@ runs:
         if [ "${WITH_SARIF}" = "true" ]; then
             SARIF_FLAG="--report-sarif=${RUNNER_TEMP}/ast-metrics-review.sarif"
             if [ -n "${SARIF_MAX_LEVEL}" ]; then
-                # Passed only when the installed binary knows the flag, so that
-                # pinning an older AST Metrics release keeps working.
-                if ast-metrics review --help | grep -q -- "--sarif-max-level"; then
-                    SARIF_FLAG="${SARIF_FLAG} --sarif-max-level=${SARIF_MAX_LEVEL}"
-                else
-                    echo "::notice::This AST Metrics version ignores sarif-max-level; code scanning may fail its own check on high severity regressions, whatever fail-on says"
-                fi
+                SARIF_FLAG="${SARIF_FLAG} --sarif-max-level=${SARIF_MAX_LEVEL}"
             fi
         fi
 
