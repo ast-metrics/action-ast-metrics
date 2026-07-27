@@ -30,6 +30,10 @@ inputs:
     description: 'Upload regressions to GitHub code scanning as SARIF. Requires the security-events: write permission, and GitHub Advanced Security on private repositories. Note: code scanning alerts are reported by the GitHub Advanced Security bot and listed under the Security tab; for plain quality annotations, see the annotations input.'
     required: false
     default: 'false'
+  sarif-max-level:
+    description: 'Ceiling for the level of the SARIF results: error, warning or note. Default: warning, because code scanning fails its own pull request check as soon as a new error level alert appears in the diff, whatever fail-on says. Set to error to let code scanning block the pull request on high severity regressions. Ignored by AST Metrics releases that predate the option.'
+    required: false
+    default: 'warning'
   annotations:
     description: 'Annotate the changed files with the new findings, directly from the workflow (no GitHub Advanced Security required). Default: auto, meaning enabled unless sarif is enabled, since code scanning already annotates the same findings. Use true to force both channels, false to disable.'
     required: false
@@ -97,6 +101,7 @@ runs:
         FAIL_ON: ${{ inputs.fail-on }}
         MAX_FINDINGS: ${{ inputs.max-findings }}
         WITH_SARIF: ${{ inputs.sarif }}
+        SARIF_MAX_LEVEL: ${{ inputs.sarif-max-level }}
       run: |
         set -e
         git fetch origin "${BASE_REF}" --quiet || true
@@ -104,6 +109,15 @@ runs:
         SARIF_FLAG=""
         if [ "${WITH_SARIF}" = "true" ]; then
             SARIF_FLAG="--report-sarif=${RUNNER_TEMP}/ast-metrics-review.sarif"
+            if [ -n "${SARIF_MAX_LEVEL}" ]; then
+                # Passed only when the installed binary knows the flag, so that
+                # pinning an older AST Metrics release keeps working.
+                if ast-metrics review --help | grep -q -- "--sarif-max-level"; then
+                    SARIF_FLAG="${SARIF_FLAG} --sarif-max-level=${SARIF_MAX_LEVEL}"
+                else
+                    echo "::notice::This AST Metrics version ignores sarif-max-level; code scanning may fail its own check on high severity regressions, whatever fail-on says"
+                fi
+            fi
         fi
 
         set +e

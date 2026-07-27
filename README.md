@@ -73,6 +73,7 @@ Note: pull requests coming from forks always run with a read-only token; the com
 | `comment` | `true` | Post and update a single comment on the pull request (best effort). |
 | `annotations` | `auto` | Annotate the changed files with the new findings, directly from the workflow (no GitHub Advanced Security required). `auto` enables them unless `sarif` is enabled, since code scanning already annotates the same findings. `true` forces both channels, `false` disables them. |
 | `sarif` | `false` | Upload regressions to GitHub code scanning. Alerts are reported by the GitHub Advanced Security bot under the Security tab; use `annotations` for plain quality annotations. |
+| `sarif-max-level` | `warning` | Ceiling for the level of the SARIF results: `error`, `warning` or `note`. Code scanning fails its own check as soon as a new `error` alert appears in the diff, so the default keeps it informative like `fail-on: never`. Set to `error` to let code scanning block the pull request. |
 | `html-artifact` | `auto` | Upload the full HTML report as an artifact: `true` on push, `false` on pull requests by default. |
 | `max-findings` | `5` | Maximum number of regressions displayed in the summary and the comment. |
 
@@ -85,6 +86,8 @@ Start in informative mode (the default), then make the gate blocking once the te
   with:
     fail-on: high
 ```
+
+Beware of a second gate when `sarif: true`: code scanning publishes its own check, and fails it on any new `error` level alert regardless of `fail-on`. `sarif-max-level` (default `warning`) keeps that check informative; set it to `error` if you want code scanning to block too.
 
 ### Architecture rules
 
