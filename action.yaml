@@ -31,9 +31,9 @@ inputs:
     required: false
     default: 'false'
   annotations:
-    description: 'Annotate the changed files with the new findings, directly from the workflow (no GitHub Advanced Security required). Set to false to avoid duplicates when sarif is enabled.'
+    description: 'Annotate the changed files with the new findings, directly from the workflow (no GitHub Advanced Security required). Default: auto, meaning enabled unless sarif is enabled, since code scanning already annotates the same findings. Use true to force both channels, false to disable.'
     required: false
-    default: 'true'
+    default: 'auto'
   html-artifact:
     description: 'Upload the full HTML report as a build artifact. Default: true on push, false on pull requests (auto).'
     required: false
@@ -129,7 +129,7 @@ runs:
         echo "exit-code=${CODE}" >> "$GITHUB_OUTPUT"
 
     - name: Annotate pull request
-      if: (github.event_name == 'pull_request') && inputs.annotations == 'true'
+      if: (github.event_name == 'pull_request') && (inputs.annotations == 'true' || (inputs.annotations == 'auto' && inputs.sarif != 'true'))
       continue-on-error: true
       shell: bash
       run: |
@@ -137,6 +137,8 @@ runs:
         # (quality context), visible in the Files changed tab, and available
         # without GitHub Advanced Security. GitHub caps annotations at 10 per
         # type and per step; the SARIF upload remains the complete channel.
+        # Skipped by default when SARIF is on: code scanning would annotate the
+        # very same findings, and both channels together read as duplicates.
         REPORT="${RUNNER_TEMP}/ast-metrics-review.json"
         [ -f "${REPORT}" ] || exit 0
         jq -r '
