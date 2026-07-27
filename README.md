@@ -1,6 +1,6 @@
 # AST Metrics GitHub Action
 
-> Prevent architectural regressions in your pull requests, powered by [AST Metrics](https://github.com/Halleck45/ast-metrics/).
+> Prevent architectural regressions in your pull requests, powered by [AST Metrics](https://github.com/ast-metrics/ast-metrics/).
 
 On each pull request, this action compares your branch with the target branch and reports **only new or worsened issues**: existing debt is never reported. Typical findings:
 

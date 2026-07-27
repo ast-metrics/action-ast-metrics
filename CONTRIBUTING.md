@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping out. This repository only contains the composite action; the analysis itself lives in [Halleck45/ast-metrics](https://github.com/Halleck45/ast-metrics).
+Thanks for helping out. This repository only contains the composite action; the analysis itself lives in [ast-metrics/ast-metrics](https://github.com/ast-metrics/ast-metrics).
 
 ## Layout
 
@@ -34,7 +34,7 @@ By default the action downloads a released binary, so an unreleased CLI feature 
 ```yaml
 - name: Build AST Metrics from source
   run: |
-    git clone --depth 1 https://github.com/Halleck45/ast-metrics /tmp/ast-metrics
+    git clone --depth 1 https://github.com/ast-metrics/ast-metrics /tmp/ast-metrics
     make -C /tmp/ast-metrics build
     sudo install /tmp/ast-metrics/bin/ast-metrics /usr/local/bin/ast-metrics
 - uses: halleck45/action-ast-metrics@v2
