@@ -87,7 +87,7 @@ Start in informative mode (the default), then make the gate blocking once the te
     fail-on: high
 ```
 
-Beware of a second gate when `sarif: true`: code scanning publishes its own check, and fails it on any new `error` level alert regardless of `fail-on`. `sarif-max-level` (default `warning`) keeps that check informative; set it to `error` if you want code scanning to block too.
+`fail-on` is the only gate, including with `sarif: true`. Code scanning publishes a check of its own and fails it on any new `error` level alert, whatever `fail-on` says, so the action caps the SARIF level at `warning` by default (see `sarif-max-level`) to keep that check informative. Set `sarif-max-level: error` if you do want code scanning to block as well.
 
 ### Architecture rules
 
