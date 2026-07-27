@@ -56,6 +56,7 @@ The action degrades gracefully depending on the permissions you grant:
 | Feature | Required permission | Behavior when missing |
 |---|---|---|
 | Check status and job summary | none | always works, including pull requests from forks |
+| Inline annotations (`annotations: true`) | none | always works, including pull requests from forks |
 | Pull request comment | `pull-requests: write` | skipped with a notice; the report stays in the job summary |
 | SARIF upload (`sarif: true`) | `security-events: write` (and GitHub Advanced Security on private repositories) | skipped without failing the build |
 
@@ -65,12 +66,13 @@ Note: pull requests coming from forks always run with a read-only token; the com
 
 | Input | Default | Description |
 |---|---|---|
-| `version` | `latest` | AST Metrics version to install. Pinning (e.g. `v0.28.0`) is recommended for reproducible checks. |
+| `version` | `latest` | AST Metrics version to install. Pinning (e.g. `v0.28.0`) is recommended for reproducible checks. `local` reuses an `ast-metrics` binary already present in the `PATH` instead of downloading a release. |
 | `directory` | `.` | Directory to analyze. |
 | `base` | base branch of the PR | Git reference to compare with. |
 | `fail-on` | `never` | Fail the check when a regression of at least this severity is introduced: `high`, `medium`, `any` or `never`. |
 | `comment` | `true` | Post and update a single comment on the pull request (best effort). |
-| `sarif` | `false` | Upload regressions to GitHub code scanning. |
+| `annotations` | `true` | Annotate the changed files with the new findings, directly from the workflow (no GitHub Advanced Security required). Set to `false` to avoid duplicates when `sarif` is enabled. |
+| `sarif` | `false` | Upload regressions to GitHub code scanning. Alerts are reported by the GitHub Advanced Security bot under the Security tab; use `annotations` for plain quality annotations. |
 | `html-artifact` | `auto` | Upload the full HTML report as an artifact: `true` on push, `false` on pull requests by default. |
 | `max-findings` | `5` | Maximum number of regressions displayed in the summary and the comment. |
 
@@ -87,6 +89,21 @@ Start in informative mode (the default), then make the gate blocking once the te
 ### Architecture rules
 
 If your repository has an `.ast-metrics.yaml` configuration with requirements (forbidden dependencies, complexity budgets...), the review also reports **new** violations introduced by the pull request, and only those.
+
+### Testing an unreleased AST Metrics build
+
+By default the action downloads a released binary. Set `version: local` to reuse whatever `ast-metrics` a previous step put in the `PATH`:
+
+```yaml
+- name: Build AST Metrics from source
+  run: |
+    git clone --depth 1 https://github.com/Halleck45/ast-metrics /tmp/ast-metrics
+    make -C /tmp/ast-metrics build
+    sudo install /tmp/ast-metrics/bin/ast-metrics /usr/local/bin/ast-metrics
+- uses: halleck45/action-ast-metrics@v2
+  with:
+    version: local
+```
 
 ## Migrating from v1
 

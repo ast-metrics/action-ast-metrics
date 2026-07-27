@@ -7,7 +7,7 @@ branding:
 
 inputs:
   version:
-    description: 'Version of AST Metrics to use (e.g. v0.28.0). Pinning a version is recommended for reproducible checks.'
+    description: 'Version of AST Metrics to use (e.g. v0.28.0). Pinning a version is recommended for reproducible checks. Use "local" to reuse an ast-metrics binary already present in the PATH, instead of downloading a release (useful to test an unreleased build).'
     required: false
     default: 'latest'
   directory:
@@ -27,9 +27,13 @@ inputs:
     required: false
     default: 'true'
   sarif:
-    description: 'Upload regressions to GitHub code scanning as SARIF. Requires the security-events: write permission, and GitHub Advanced Security on private repositories.'
+    description: 'Upload regressions to GitHub code scanning as SARIF. Requires the security-events: write permission, and GitHub Advanced Security on private repositories. Note: code scanning alerts are reported by the GitHub Advanced Security bot and listed under the Security tab; for plain quality annotations, see the annotations input.'
     required: false
     default: 'false'
+  annotations:
+    description: 'Annotate the changed files with the new findings, directly from the workflow (no GitHub Advanced Security required). Set to false to avoid duplicates when sarif is enabled.'
+    required: false
+    default: 'true'
   html-artifact:
     description: 'Upload the full HTML report as a build artifact. Default: true on push, false on pull requests (auto).'
     required: false
@@ -55,6 +59,17 @@ runs:
         AST_METRICS_VERSION: ${{ inputs.version }}
       run: |
         set -e
+        if [ "${AST_METRICS_VERSION}" = "local" ]; then
+            # Escape hatch to validate an unreleased build: a previous step is
+            # expected to have put the binary in the PATH.
+            if ! command -v ast-metrics > /dev/null 2>&1; then
+                echo "::error::version: local requires an ast-metrics binary in the PATH, installed by a previous step"
+                exit 1
+            fi
+            echo "Using the AST Metrics binary already in the PATH: $(command -v ast-metrics)"
+            ast-metrics --version || true
+            exit 0
+        fi
         if [ -z "${AST_METRICS_VERSION}" ] || [ "${AST_METRICS_VERSION}" = "latest" ]; then
             VERSION=$(curl -s https://api.github.com/repos/halleck45/ast-metrics/releases/latest | grep tag_name | cut -d '"' -f 4)
         else
@@ -112,6 +127,31 @@ runs:
         # after the comment and SARIF steps had a chance to run.
         cat "${RUNNER_TEMP}/ast-metrics-review.md" >> "$GITHUB_STEP_SUMMARY"
         echo "exit-code=${CODE}" >> "$GITHUB_OUTPUT"
+
+    - name: Annotate pull request
+      if: (github.event_name == 'pull_request') && inputs.annotations == 'true'
+      continue-on-error: true
+      shell: bash
+      run: |
+        # Workflow-command annotations: attributed to the workflow itself
+        # (quality context), visible in the Files changed tab, and available
+        # without GitHub Advanced Security. GitHub caps annotations at 10 per
+        # type and per step; the SARIF upload remains the complete channel.
+        REPORT="${RUNNER_TEMP}/ast-metrics-review.json"
+        [ -f "${REPORT}" ] || exit 0
+        jq -r '
+            .regressions[]
+            | [
+                (if .severity == "high" then "error" else "warning" end),
+                .file,
+                ((.line // 0) | if . < 1 then 1 else . end),
+                .rule,
+                ((if (.subject // "") != "" then .subject + ": " else "" end) + .message)
+              ]
+            | @tsv
+        ' "${REPORT}" | while IFS=$'\t' read -r level file line rule message; do
+            echo "::${level} file=${file},line=${line},title=AST Metrics (${rule})::${message}"
+        done
 
     - name: Comment pull request (best effort)
       if: (github.event_name == 'pull_request') && inputs.comment == 'true'
