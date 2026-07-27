@@ -1,6 +1,6 @@
 # AST Metrics GitHub Action
 
-> Prevent architectural regressions in your pull requests, powered by [AST Metrics](https://github.com/Halleck45/ast-metrics/).
+> Prevent architectural regressions in your pull requests, powered by [AST Metrics](https://github.com/ast-metrics/ast-metrics/).
 
 On each pull request, this action compares your branch with the target branch and reports **only new or worsened issues**: existing debt is never reported. Typical findings:
 
@@ -56,6 +56,7 @@ The action degrades gracefully depending on the permissions you grant:
 | Feature | Required permission | Behavior when missing |
 |---|---|---|
 | Check status and job summary | none | always works, including pull requests from forks |
+| Inline annotations (`annotations`) | none | always works, including pull requests from forks |
 | Pull request comment | `pull-requests: write` | skipped with a notice; the report stays in the job summary |
 | SARIF upload (`sarif: true`) | `security-events: write` (and GitHub Advanced Security on private repositories) | skipped without failing the build |
 
@@ -65,12 +66,14 @@ Note: pull requests coming from forks always run with a read-only token; the com
 
 | Input | Default | Description |
 |---|---|---|
-| `version` | `latest` | AST Metrics version to install. Pinning (e.g. `v0.28.0`) is recommended for reproducible checks. |
+| `version` | `latest` | AST Metrics version to install. Pinning (e.g. `v0.28.0`) is recommended for reproducible checks. `local` reuses an `ast-metrics` binary already present in the `PATH` instead of downloading a release. |
 | `directory` | `.` | Directory to analyze. |
 | `base` | base branch of the PR | Git reference to compare with. |
 | `fail-on` | `never` | Fail the check when a regression of at least this severity is introduced: `high`, `medium`, `any` or `never`. |
 | `comment` | `true` | Post and update a single comment on the pull request (best effort). |
-| `sarif` | `false` | Upload regressions to GitHub code scanning. |
+| `annotations` | `auto` | Annotate the changed files with the new findings, directly from the workflow (no GitHub Advanced Security required). `auto` enables them unless `sarif` is enabled, since code scanning already annotates the same findings. `true` forces both channels, `false` disables them. |
+| `sarif` | `false` | Upload regressions to GitHub code scanning. Alerts are reported by the GitHub Advanced Security bot under the Security tab; use `annotations` for plain quality annotations. |
+| `sarif-max-level` | `warning` | Ceiling for the level of the SARIF results: `error`, `warning` or `note`. Code scanning fails its own check as soon as a new `error` alert appears in the diff, so the default keeps it informative like `fail-on: never`. Set to `error` to let code scanning block the pull request. |
 | `html-artifact` | `auto` | Upload the full HTML report as an artifact: `true` on push, `false` on pull requests by default. |
 | `max-findings` | `5` | Maximum number of regressions displayed in the summary and the comment. |
 
