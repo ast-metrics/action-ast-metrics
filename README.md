@@ -31,7 +31,7 @@ jobs:
   ast-metrics:
     runs-on: ubuntu-latest
     steps:
-      - uses: halleck45/action-ast-metrics@v2
+      - uses: ast-metrics/action-ast-metrics@v2
 ```
 
 That's it. Each pull request gets a check with a short, stable summary:
@@ -82,7 +82,7 @@ Note: pull requests coming from forks always run with a read-only token; the com
 Start in informative mode (the default), then make the gate blocking once the team trusts the signal:
 
 ```yaml
-- uses: halleck45/action-ast-metrics@v2
+- uses: ast-metrics/action-ast-metrics@v2
   with:
     fail-on: high
 ```

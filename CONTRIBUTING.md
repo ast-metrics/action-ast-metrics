@@ -13,7 +13,7 @@ Thanks for helping out. This repository only contains the composite action; the 
 Consumers reference `@v2`, a moving major tag. Do not move it to try something out. Push a branch instead and point a test workflow at it:
 
 ```yaml
-- uses: halleck45/action-ast-metrics@my-branch
+- uses: ast-metrics/action-ast-metrics@my-branch
 ```
 
 `gh run rerun <run-id>` re-resolves the branch to its new tip, so pushing to the branch and rerunning is the fastest loop.
@@ -22,7 +22,7 @@ Locally, [`act`](https://github.com/nektos/act) can substitute a checkout of thi
 
 ```bash
 act pull_request --eventpath ./event.json \
-  --local-repository halleck45/action-ast-metrics@v2=/path/to/action-ast-metrics
+  --local-repository ast-metrics/action-ast-metrics@v2=/path/to/action-ast-metrics
 ```
 
 The SARIF upload step fails under `act` (no code scanning API); it is `continue-on-error`, so the rest of the run still completes.
@@ -37,7 +37,7 @@ By default the action downloads a released binary, so an unreleased CLI feature 
     git clone --depth 1 https://github.com/ast-metrics/ast-metrics /tmp/ast-metrics
     make -C /tmp/ast-metrics build
     sudo install /tmp/ast-metrics/bin/ast-metrics /usr/local/bin/ast-metrics
-- uses: halleck45/action-ast-metrics@v2
+- uses: ast-metrics/action-ast-metrics@v2
   with:
     version: local
 ```
