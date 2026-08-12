@@ -5,7 +5,11 @@ Thanks for helping out. This repository only contains the composite action; the 
 ## Layout
 
 - `action.yaml`: the composite action, the only thing consumers use
-- `.github/workflows/test.yml`: runs the action on this repository (`uses: ./`) and asserts the reports it produces
+- `scripts/select-directories.sh`: validates and selects the monorepo directories passed to AST Metrics
+- `scripts/run-directories.sh`: runs AST Metrics independently in each selected project and combines its reports
+- `tests/select-directories.sh`: local tests for directory selection and pull request filtering
+- `tests/run-directories.sh`: local tests for per-project configuration loading and report aggregation
+- `.github/workflows/test.yml`: runs the local tests and the action on this repository (`uses: ./`), then asserts the reports it produces
 - `tests/fixtures/`: sample source files analyzed by that workflow
 
 ## Iterating without cutting a release

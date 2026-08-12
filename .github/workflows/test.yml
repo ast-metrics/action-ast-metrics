@@ -15,7 +15,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test directory selection
+        run: bash tests/select-directories.sh
+
+      - name: Test directory execution
+        run: bash tests/run-directories.sh
+
       - uses: ./
+        with:
+          directories: |
+            scripts
+            tests/fixtures
+          only-changed: false
 
       - name: Assertions
         shell: bash
@@ -26,7 +37,9 @@ jobs:
               test -f "${RUNNER_TEMP}/ast-metrics-review.md"
               test -f "${RUNNER_TEMP}/ast-metrics-review.json"
               grep -q "methodologyVersion" "${RUNNER_TEMP}/ast-metrics-review.json"
+              test "$(jq '.projects | length' "${RUNNER_TEMP}/ast-metrics-review.json")" = "2"
           else
               # Full analysis mode must have produced the HTML report
-              test -d "${RUNNER_TEMP}/ast-metrics-html-report"
+              test -f "${RUNNER_TEMP}/ast-metrics-html-report/scripts/index.html"
+              test -f "${RUNNER_TEMP}/ast-metrics-html-report/tests/fixtures/index.html"
           fi
