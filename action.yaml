@@ -11,9 +11,17 @@ inputs:
     required: false
     default: 'latest'
   directory:
-    description: 'Directory to analyze'
+    description: 'Single directory to analyze, from the repository root and with the root configuration. Ignored when directories is set.'
     required: false
     default: '.'
+  directories:
+    description: 'Independent project directories to analyze, one per line. Each project is analyzed from its own directory with its local AST Metrics configuration. Takes precedence over directory.'
+    required: false
+    default: ''
+  only-changed:
+    description: 'On pull requests, analyze only configured directories containing changed files. Applies to directory as well as to directories. Set to false to analyze every configured directory.'
+    required: false
+    default: 'true'
   base:
     description: 'Git reference to compare the pull request with. Default: the base branch of the pull request.'
     required: false
@@ -43,7 +51,7 @@ inputs:
     required: false
     default: 'auto'
   max-findings:
-    description: 'Maximum number of regressions displayed in the summary and the comment'
+    description: 'Maximum number of regressions displayed per analyzed project in the summary and the comment'
     required: false
     default: '5'
 
@@ -57,7 +65,49 @@ runs:
         # Full history so the review can compute the merge-base with the target branch
         fetch-depth: 0
 
+    - name: Fetch pull request base
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        BASE_REF: ${{ inputs.base != '' && inputs.base || github.base_ref }}
+      run: git fetch --quiet origin "${BASE_REF}" || true
+
+    - name: Select directories to analyze
+      id: scope
+      shell: bash
+      env:
+        DIRECTORY: ${{ inputs.directory }}
+        DIRECTORIES: ${{ inputs.directories }}
+        ONLY_CHANGED: ${{ inputs.only-changed }}
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_REF: ${{ inputs.base != '' && inputs.base || github.base_ref }}
+        BEFORE_SHA: ${{ github.event.before }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/select-directories.sh"
+
+    - name: Report skipped analysis
+      if: (github.event_name == 'pull_request') && steps.scope.outputs.has-directories != 'true'
+      shell: bash
+      env:
+        WITH_SARIF: ${{ inputs.sarif }}
+      run: |
+        cat > "${RUNNER_TEMP}/ast-metrics-review.md" <<'EOF'
+        ## AST Metrics: analysis skipped
+
+        No configured directory requires analysis for this pull request.
+        EOF
+        cat "${RUNNER_TEMP}/ast-metrics-review.md" >> "${GITHUB_STEP_SUMMARY}"
+        if [ "${WITH_SARIF}" = "true" ]; then
+            cat > "${RUNNER_TEMP}/ast-metrics-review.sarif" <<'EOF'
+        {
+          "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+          "version": "2.1.0",
+          "runs": [{"tool": {"driver": {"name": "AST Metrics"}}, "results": []}]
+        }
+        EOF
+        fi
+
     - name: Install AST Metrics
+      if: steps.scope.outputs.has-directories == 'true'
       shell: bash
       env:
         AST_METRICS_VERSION: ${{ inputs.version }}
@@ -99,51 +149,26 @@ runs:
 
     - name: Review pull request
       id: review
-      if: github.event_name == 'pull_request'
+      if: (github.event_name == 'pull_request') && steps.scope.outputs.has-directories == 'true'
       shell: bash
       env:
-        DIRECTORY_TO_ANALYZE: ${{ inputs.directory }}
-        BASE_REF: ${{ inputs.base != '' && inputs.base || github.base_ref }}
+        DIRECTORIES_FILE: ${{ steps.scope.outputs.directories-file }}
+        ISOLATED: ${{ steps.scope.outputs.isolated }}
+        BASE_REF: ${{ steps.scope.outputs.base-ref }}
         FAIL_ON: ${{ inputs.fail-on }}
         MAX_FINDINGS: ${{ inputs.max-findings }}
         WITH_SARIF: ${{ inputs.sarif }}
         SARIF_MAX_LEVEL: ${{ inputs.sarif-max-level }}
       run: |
         set -e
-        git fetch origin "${BASE_REF}" --quiet || true
+        MODE=review bash "${GITHUB_ACTION_PATH}/scripts/run-directories.sh"
 
-        SARIF_FLAG=""
-        if [ "${WITH_SARIF}" = "true" ]; then
-            SARIF_FLAG="--report-sarif=${RUNNER_TEMP}/ast-metrics-review.sarif"
-            if [ -n "${SARIF_MAX_LEVEL}" ]; then
-                SARIF_FLAG="${SARIF_FLAG} --sarif-max-level=${SARIF_MAX_LEVEL}"
-            fi
-        fi
-
-        set +e
-        ast-metrics review \
-            --base "origin/${BASE_REF}" \
-            --fail-on "${FAIL_ON}" \
-            --max-findings "${MAX_FINDINGS}" \
-            --report-markdown "${RUNNER_TEMP}/ast-metrics-review.md" \
-            --report-json "${RUNNER_TEMP}/ast-metrics-review.json" \
-            ${SARIF_FLAG} \
-            "${DIRECTORY_TO_ANALYZE}"
-        CODE=$?
-        set -e
-
-        if [ ! -f "${RUNNER_TEMP}/ast-metrics-review.md" ]; then
-            echo "::error::AST Metrics review failed before producing a report"
-            exit "${CODE}"
-        fi
-
-        # Publish the summary now; the quality gate verdict is enforced at the end,
-        # after the comment and SARIF steps had a chance to run.
+        # The quality gate verdict is enforced at the end, after the comment
+        # and SARIF steps had a chance to run.
         cat "${RUNNER_TEMP}/ast-metrics-review.md" >> "$GITHUB_STEP_SUMMARY"
-        echo "exit-code=${CODE}" >> "$GITHUB_OUTPUT"
 
     - name: Annotate pull request
-      if: (github.event_name == 'pull_request') && (inputs.annotations == 'true' || (inputs.annotations == 'auto' && inputs.sarif != 'true'))
+      if: (github.event_name == 'pull_request') && steps.scope.outputs.has-directories == 'true' && (inputs.annotations == 'true' || (inputs.annotations == 'auto' && inputs.sarif != 'true'))
       continue-on-error: true
       shell: bash
       run: |
@@ -178,7 +203,16 @@ runs:
           const fs = require('fs');
           const marker = '<!-- ast-metrics-review -->';
           const report = fs.readFileSync(`${process.env.RUNNER_TEMP}/ast-metrics-review.md`, 'utf8');
-          const body = `${marker}\n${report}`;
+          // A monorepo applies max-findings per project, so the combined report
+          // can outgrow the 65536 character limit of a comment body. The job
+          // summary is not capped and always carries the whole report.
+          const limit = 65536;
+          const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+          const truncationNotice = `\n\n_Report truncated. The complete report is in the [job summary](${runUrl})._\n`;
+          let body = `${marker}\n${report}`;
+          if (body.length > limit) {
+            body = body.slice(0, limit - truncationNotice.length) + truncationNotice;
+          }
           try {
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
@@ -219,23 +253,24 @@ runs:
         category: ast-metrics
 
     - name: Upload HTML report (pull request, optional)
-      if: (github.event_name == 'pull_request') && inputs.html-artifact == 'true'
+      if: (github.event_name == 'pull_request') && steps.scope.outputs.has-directories == 'true' && inputs.html-artifact == 'true'
       shell: bash
       env:
-        DIRECTORY_TO_ANALYZE: ${{ inputs.directory }}
+        DIRECTORIES_FILE: ${{ steps.scope.outputs.directories-file }}
+        ISOLATED: ${{ steps.scope.outputs.isolated }}
       run: |
         set -e
-        ast-metrics analyze --non-interactive --report-html="${RUNNER_TEMP}/ast-metrics-html-report" "${DIRECTORY_TO_ANALYZE}"
+        MODE=html bash "${GITHUB_ACTION_PATH}/scripts/run-directories.sh"
 
     - name: Upload HTML report artifact (pull request, optional)
-      if: (github.event_name == 'pull_request') && inputs.html-artifact == 'true'
+      if: (github.event_name == 'pull_request') && steps.scope.outputs.has-directories == 'true' && inputs.html-artifact == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: ast-metrics-report
         path: ${{ runner.temp }}/ast-metrics-html-report
 
     - name: Enforce quality gate
-      if: github.event_name == 'pull_request'
+      if: (github.event_name == 'pull_request') && steps.scope.outputs.has-directories == 'true'
       shell: bash
       env:
         CODE: ${{ steps.review.outputs.exit-code }}
@@ -250,21 +285,18 @@ runs:
     # ------------------------------------------------------------------
 
     - name: Analyze
-      if: github.event_name != 'pull_request'
+      if: github.event_name != 'pull_request' && steps.scope.outputs.has-directories == 'true'
       shell: bash
       env:
-        DIRECTORY_TO_ANALYZE: ${{ inputs.directory }}
+        DIRECTORIES_FILE: ${{ steps.scope.outputs.directories-file }}
+        ISOLATED: ${{ steps.scope.outputs.isolated }}
       run: |
         set -e
-        ast-metrics analyze \
-            --non-interactive \
-            --report-html="${RUNNER_TEMP}/ast-metrics-html-report" \
-            --report-markdown="${RUNNER_TEMP}/ast-metrics-report.md" \
-            "${DIRECTORY_TO_ANALYZE}"
+        MODE=analyze bash "${GITHUB_ACTION_PATH}/scripts/run-directories.sh"
         cat "${RUNNER_TEMP}/ast-metrics-report.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Upload HTML report artifact
-      if: github.event_name != 'pull_request' && inputs.html-artifact != 'false'
+      if: github.event_name != 'pull_request' && steps.scope.outputs.has-directories == 'true' && inputs.html-artifact != 'false'
       uses: actions/upload-artifact@v4
       with:
         name: ast-metrics-report

@@ -67,7 +67,9 @@ Note: pull requests coming from forks always run with a read-only token; the com
 | Input | Default | Description |
 |---|---|---|
 | `version` | `latest` | AST Metrics version to install. Pinning (e.g. `v0.28.0`) is recommended for reproducible checks. `local` reuses an `ast-metrics` binary already present in the `PATH` instead of downloading a release. |
-| `directory` | `.` | Directory to analyze. |
+| `directory` | `.` | Single directory to analyze, from the repository root and with the root configuration. Ignored when `directories` is set. |
+| `directories` | empty | Independent project directories to analyze, one per line. Each project uses its local AST Metrics configuration. |
+| `only-changed` | `true` | On pull requests, analyze only configured directories containing changed files. Set it to `false` to analyze every configured directory. |
 | `base` | base branch of the PR | Git reference to compare with. |
 | `fail-on` | `never` | Fail the check when a regression of at least this severity is introduced: `high`, `medium`, `any` or `never`. |
 | `comment` | `true` | Post and update a single comment on the pull request (best effort). |
@@ -75,7 +77,42 @@ Note: pull requests coming from forks always run with a read-only token; the com
 | `sarif` | `false` | Upload regressions to GitHub code scanning. Alerts are reported by the GitHub Advanced Security bot under the Security tab; use `annotations` for plain quality annotations. |
 | `sarif-max-level` | `warning` | Ceiling for the level of the SARIF results: `error`, `warning` or `note`. Code scanning fails its own check as soon as a new `error` alert appears in the diff, so the default keeps it informative like `fail-on: never`. Set to `error` to let code scanning block the pull request. |
 | `html-artifact` | `auto` | Upload the full HTML report as an artifact: `true` on push, `false` on pull requests by default. |
-| `max-findings` | `5` | Maximum number of regressions displayed in the summary and the comment. |
+| `max-findings` | `5` | Maximum number of regressions displayed per project in the summary and the comment. |
+
+### Monorepositories
+
+List each project once, one directory per line:
+
+```yaml
+- uses: ast-metrics/action-ast-metrics@v2
+  with:
+    directories: |
+      apps/api
+      apps/backoffice
+      packages/shared
+```
+
+Each directory is treated as an independent project. AST Metrics runs once per directory, from that directory, so files such as `apps/api/.ast-metrics.yaml` and `apps/backoffice/.ast-metrics.yaml` can define different exclusions, requirements, and thresholds.
+
+The action consolidates the per-project Markdown reports into one job summary and pull request comment. It also combines annotations and SARIF results, places every HTML report under its project path in the same artifact, and fails the global quality gate when any project fails its own gate.
+
+By default, a directory is analyzed only when at least one changed path is inside it. This avoids running AST Metrics for projects outside the scope of the pull request.
+
+Set `only-changed: false` to analyze every configured directory on each pull request:
+
+```yaml
+with:
+  directories: |
+    apps/api
+    apps/backoffice
+  only-changed: false
+```
+
+The comparison uses the pull request merge-base and handles spaces, renames, and deletions without calling the GitHub API. Changing a project's local AST Metrics configuration selects that project, since the configuration lives inside its directory. If no directory requires analysis, installation and analysis are skipped and the check succeeds with an explicit summary.
+
+`only-changed` applies to `directory` as well as to `directories`. Pushes always analyze every configured directory, regardless of this input.
+
+Configured directories must be inside the checkout and must not overlap, which prevents duplicate findings across project reports. A directory that the analyzed change deletes is skipped with a warning, so that removing a project does not have to land in the same commit as the workflow update. Any other missing path is rejected, so a stale `directories` entry cannot silently disable the analysis of a renamed project.
 
 ### Blocking mode
 
