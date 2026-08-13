@@ -24,7 +24,7 @@ mkdir -p "${repository}/projects/api" "${repository}/projects/web" "${repository
 git -C "${repository}" init --quiet --initial-branch=main
 git -C "${repository}" config user.name "Test"
 git -C "${repository}" config user.email "test@example.com"
-printf 'threshold: root\n' > "${repository}/.ast-metrics.yaml"
+printf 'threshold: root\nfail: true\n' > "${repository}/.ast-metrics.yaml"
 printf 'threshold: api\n' > "${repository}/projects/api/.ast-metrics.yaml"
 printf 'threshold: web\nfail: true\n' > "${repository}/projects/web/.ast-metrics.yaml"
 printf 'source\n' > "${repository}/projects/api/source.php"
@@ -69,6 +69,17 @@ jq -e '
     and (.summary.filesChanged == 2)
     and (.regressions | length == 1)
 ' "${runner_temp}/ast-metrics-review.json" > /dev/null || fail "combined review JSON is invalid"
+# Repository wide values stay scalars as long as the projects agree on them.
+jq -e '
+    .baseRef == "origin/main" and .baseSha == "base" and .headSha == "head"
+    and .methodologyVersion == "test"
+' "${runner_temp}/ast-metrics-review.json" > /dev/null \
+    || fail "combined review JSON did not keep the shared repository values"
+# The annotation step feeds on these paths, so they must stay relative to the
+# repository root and not to the project the finding comes from.
+jq -e '[.regressions[].file] == ["projects/web/source.php"]' \
+    "${runner_temp}/ast-metrics-review.json" > /dev/null \
+    || fail "combined regressions are not relative to the repository root"
 jq -e '.runs | length == 2' "${runner_temp}/ast-metrics-review.sarif" > /dev/null \
     || fail "combined SARIF does not contain both projects"
 jq -e '
@@ -76,6 +87,11 @@ jq -e '
     == ["ast-metrics/projects/api", "ast-metrics/projects/web"]
 ' "${runner_temp}/ast-metrics-review.sarif" > /dev/null \
     || fail "combined SARIF runs do not have stable project identities"
+jq -e '
+    [.runs[].results[].locations[].physicalLocation.artifactLocation.uri]
+    == ["projects/api/source.php", "projects/web/source.php"]
+' "${runner_temp}/ast-metrics-review.sarif" > /dev/null \
+    || fail "combined SARIF locations are not relative to the repository root"
 
 (
     cd "${repository}"
@@ -134,8 +150,33 @@ legacy_log="${legacy_temp}/calls"
     bash "${runner}"
 )
 
-assert_file_contains "${legacy_log}" "${repository}|review|projects/api|threshold: root,"
+assert_file_contains "${legacy_log}" "${repository}|review|projects/api|threshold: root,fail: true,"
 jq -e 'has("projects") | not' "${legacy_temp}/ast-metrics-review.json" > /dev/null \
     || fail "legacy JSON report shape changed"
+jq -e '[.regressions[].file] == ["projects/api/source.php"]' \
+    "${legacy_temp}/ast-metrics-review.json" > /dev/null \
+    || fail "legacy regressions are not relative to the repository root"
+
+# A directory name carrying a backtick must not break out of the Markdown code
+# span of its project heading.
+awkward="pack\`age"
+mkdir -p "${repository}/${awkward}"
+printf 'threshold: awkward\n' > "${repository}/${awkward}/.ast-metrics.yaml"
+printf 'source\n' > "${repository}/${awkward}/source.php"
+awkward_directories_file="${test_root}/awkward-directories"
+printf '%s\n' "${awkward}" > "${awkward_directories_file}"
+awkward_temp="${test_root}/awkward"
+mkdir -p "${awkward_temp}"
+(
+    cd "${repository}"
+    PATH="${repository}/bin:${PATH}" \
+    AST_METRICS_TEST_LOG="${awkward_temp}/calls" \
+    MODE=analyze \
+    ISOLATED=true \
+    DIRECTORIES_FILE="${awkward_directories_file}" \
+    RUNNER_TEMP="${awkward_temp}" \
+    bash "${runner}"
+)
+assert_file_contains "${awkward_temp}/ast-metrics-report.md" '## Project `` pack`age ``'
 
 echo "Directory execution tests passed"

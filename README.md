@@ -67,7 +67,7 @@ Note: pull requests coming from forks always run with a read-only token; the com
 | Input | Default | Description |
 |---|---|---|
 | `version` | `latest` | AST Metrics version to install. Pinning (e.g. `v0.28.0`) is recommended for reproducible checks. `local` reuses an `ast-metrics` binary already present in the `PATH` instead of downloading a release. |
-| `directory` | `.` | Directory to analyze. Kept for backward compatibility; ignored when `directories` is set. |
+| `directory` | `.` | Single directory to analyze, from the repository root and with the root configuration. Ignored when `directories` is set. |
 | `directories` | empty | Independent project directories to analyze, one per line. Each project uses its local AST Metrics configuration. |
 | `only-changed` | `true` | On pull requests, analyze only configured directories containing changed files. Set it to `false` to analyze every configured directory. |
 | `base` | base branch of the PR | Git reference to compare with. |
@@ -108,13 +108,11 @@ with:
   only-changed: false
 ```
 
-The comparison uses the PR merge-base and handles spaces, renames, and deletions without calling the GitHub API. If no directory requires analysis, installation and analysis are skipped and the check succeeds with an explicit summary. Pushes still analyze every configured directory.
+The comparison uses the pull request merge-base and handles spaces, renames, and deletions without calling the GitHub API. Changing a project's local AST Metrics configuration selects that project, since the configuration lives inside its directory. If no directory requires analysis, installation and analysis are skipped and the check succeeds with an explicit summary.
 
-Changing a project's local AST Metrics configuration selects that project because the configuration lives inside its directory. Pushes always analyze every configured directory, regardless of this input.
+`only-changed` applies to `directory` as well as to `directories`. Pushes always analyze every configured directory, regardless of this input.
 
-Configured directories must be inside the checkout and must not overlap, which prevents duplicate findings across project reports. Missing paths are rejected, except for a directory deleted by the current pull request.
-
-The legacy `directory` input keeps its original behavior: AST Metrics runs from the repository root and loads the root configuration. Use `directories` when each monorepo project owns its configuration.
+Configured directories must be inside the checkout and must not overlap, which prevents duplicate findings across project reports. A directory that the analyzed change deletes is skipped with a warning, so that removing a project does not have to land in the same commit as the workflow update. Any other missing path is rejected, so a stale `directories` entry cannot silently disable the analysis of a renamed project.
 
 ### Blocking mode
 

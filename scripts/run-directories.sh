@@ -65,6 +65,19 @@ html_report_path() {
     fi
 }
 
+project_heading() {
+    local directory="$1"
+    local fence='`'
+    # A code span cannot contain a backtick run as long as its own delimiter,
+    # and a backslash does not escape anything inside one. Widen the fence past
+    # the longest run in the name instead, then pad so the span keeps its edges.
+    while [[ "${directory}" == *"${fence}"* ]]; do
+        fence="${fence}"'`'
+    done
+    [[ "${directory}" == *'`'* ]] && directory=" ${directory} "
+    printf '## Project %s%s%s\n\n' "${fence}" "${directory}" "${fence}"
+}
+
 append_project_report() {
     local combined_report="$1"
     local directory="$2"
@@ -75,7 +88,7 @@ append_project_report() {
         return
     fi
 
-    printf '## Project `%s`\n\n' "${directory//\`/\\\`}" >> "${combined_report}"
+    project_heading "${directory}" >> "${combined_report}"
     # Nest the CLI headings below the project heading.
     sed 's/^#/##/' "${project_report}" >> "${combined_report}"
     printf '\n' >> "${combined_report}"
@@ -182,11 +195,17 @@ run_review() {
     else
         jq -s '
             def total($field): map(.report.summary[$field] // 0) | add // 0;
+            # Repository wide values: every project reports the same one. Keep
+            # it as a scalar so consumers can still read it, and fall back to
+            # null rather than to an unparsable concatenation if they diverge.
+            def shared($field):
+                ([.[].report[$field]] | unique) as $values
+                | if ($values | length) == 1 then $values[0] else null end;
             {
-                methodologyVersion: ([.[].report.methodologyVersion] | unique | join(", ")),
-                baseRef: ([.[].report.baseRef] | unique | join(", ")),
-                baseSha: ([.[].report.baseSha] | unique | join(", ")),
-                headSha: ([.[].report.headSha] | unique | join(", ")),
+                methodologyVersion: shared("methodologyVersion"),
+                baseRef: shared("baseRef"),
+                baseSha: shared("baseSha"),
+                headSha: shared("headSha"),
                 summary: {
                     filesChanged: total("filesChanged"),
                     filesAdded: total("filesAdded"),
@@ -211,7 +230,7 @@ run_review() {
                 version: "2.1.0",
                 runs: [
                     .[] as $project
-                    | $project.report.runs[]
+                    | ($project.report.runs // [])[]
                     | .automationDetails.id = ("ast-metrics/" + $project.directory)
                 ]
             }
@@ -248,8 +267,10 @@ run_analyze() {
         )
         echo "::endgroup::"
 
+        # A non zero exit already aborted the script; this catches the analysis
+        # that reported success without writing anything.
         if [ ! -f "${markdown_report}" ]; then
-            echo "::error::AST Metrics analysis failed for '${directory}' before producing its report"
+            echo "::error::AST Metrics did not produce a report for '${directory}'"
             exit 1
         fi
         append_project_report "${combined_markdown}" "${directory}" "${markdown_report}"

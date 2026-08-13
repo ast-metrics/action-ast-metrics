@@ -51,6 +51,17 @@ fi
 printf '%s|%s|%s|%s\n' "${PWD}" "${command_name}" "${target}" "${configuration}" >> "${AST_METRICS_TEST_LOG}"
 
 project="$(basename "${PWD}")"
+
+# The real CLI reports paths relative to the repository root, whatever directory
+# it runs from and whatever target it receives. Reproduce that, so the tests
+# catch an aggregation that would leak project relative paths into the
+# annotations and the SARIF locations.
+analyzed_directory="$(git rev-parse --show-prefix)"
+if [ -n "${target}" ] && [ "${target}" != "." ]; then
+    analyzed_directory="${analyzed_directory}${target%/}/"
+fi
+analyzed_file="${analyzed_directory}source.php"
+
 gate="passed"
 if [ -f .ast-metrics.yaml ] && grep -q '^fail: true$' .ast-metrics.yaml; then
     gate="failed"
@@ -64,7 +75,7 @@ fi
 if [ -n "${json_report}" ]; then
     mkdir -p "$(dirname "${json_report}")"
     jq -n \
-        --arg project "${project}" \
+        --arg file "${analyzed_file}" \
         --arg gate "${gate}" \
         '{
             methodologyVersion: "test",
@@ -84,7 +95,7 @@ if [ -n "${json_report}" ]; then
                 kind: "regression",
                 severity: "high",
                 rule: "test-rule",
-                file: ($project + "/source.php"),
+                file: $file,
                 line: 1,
                 message: "test"
             }] else [] end),
@@ -97,13 +108,21 @@ if [ -n "${sarif_report}" ]; then
     mkdir -p "$(dirname "${sarif_report}")"
     jq -n \
         --arg project "${project}" \
+        --arg file "${analyzed_file}" \
         '{
             "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
             version: "2.1.0",
             runs: [{
                 tool: {driver: {name: "ast-metrics"}},
                 automationDetails: {id: $project},
-                results: []
+                results: [{
+                    ruleId: "test-rule",
+                    level: "warning",
+                    message: {text: "test"},
+                    locations: [{
+                        physicalLocation: {artifactLocation: {uri: $file}}
+                    }]
+                }]
             }]
         }' > "${sarif_report}"
 fi

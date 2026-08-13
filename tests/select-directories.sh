@@ -46,6 +46,7 @@ run_selector() {
     local only_changed="$3"
     local event_name="${4:-pull_request}"
     local directory="${5:-.}"
+    local before_sha="${6:-}"
     local runner_temp="${repository}/runner-temp"
     mkdir -p "${runner_temp}"
     local output_file="${runner_temp}/output"
@@ -58,6 +59,7 @@ run_selector() {
         ONLY_CHANGED="${only_changed}" \
         EVENT_NAME="${event_name}" \
         BASE_REF="main" \
+        BEFORE_SHA="${before_sha}" \
         RUNNER_TEMP="${runner_temp}" \
         GITHUB_OUTPUT="${output_file}" \
         bash "${selector}" >&2
@@ -127,10 +129,35 @@ git -C "${repository}" commit --quiet -m "delete api"
 output_file="$(run_selector "${repository}" 'apps/api' true)"
 assert_equals "false" "$(output_value "${output_file}" has-directories)"
 
+# Removing the last project under a parent directory takes that parent away
+# too, which no path resolution requiring existing components can survive.
+repository="${test_root}/deleted-with-parent"
+new_repository "${repository}"
+git -C "${repository}" rm --quiet -r "apps"
+git -C "${repository}" commit --quiet -m "delete every app"
+output_file="$(run_selector "${repository}" $'apps/api\napps/web' true)"
+assert_equals "false" "$(output_value "${output_file}" has-directories)"
+
 repository="${test_root}/push"
 new_repository "${repository}"
 output_file="$(run_selector "${repository}" $'apps/api\npackages/with space' true push)"
 assert_equals $'apps/api\npackages/with space' "$(cat "$(output_value "${output_file}" directories-file)")"
+
+# A push that deletes a project must not break the branch it lands on; the same
+# directory becomes fatal once it is gone from the comparison point too.
+repository="${test_root}/deleted-on-push"
+new_repository "${repository}"
+before_sha="$(git -C "${repository}" rev-parse HEAD)"
+git -C "${repository}" rm --quiet -r "apps/api"
+git -C "${repository}" commit --quiet -m "delete api"
+output_file="$(run_selector "${repository}" $'apps/api\napps/web' true push . "${before_sha}")"
+assert_equals "apps/web" "$(cat "$(output_value "${output_file}" directories-file)")"
+if run_selector "${repository}" $'apps/api\napps/web' true push . "$(git -C "${repository}" rev-parse HEAD)" > /dev/null 2>&1; then
+    fail "a directory missing from the comparison point should be rejected"
+fi
+if run_selector "${repository}" $'apps/api\napps/web' true push > /dev/null 2>&1; then
+    fail "a missing directory should be rejected without a comparison point"
+fi
 
 repository="${test_root}/invalid"
 new_repository "${repository}"

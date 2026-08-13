@@ -10,6 +10,7 @@ DIRECTORIES="${DIRECTORIES:-}"
 ONLY_CHANGED="${ONLY_CHANGED:-true}"
 EVENT_NAME="${EVENT_NAME:-}"
 BASE_REF="${BASE_REF:-}"
+BEFORE_SHA="${BEFORE_SHA:-}"
 
 case "${ONLY_CHANGED}" in
     true|false) ;;
@@ -19,7 +20,9 @@ case "${ONLY_CHANGED}" in
         ;;
 esac
 
-repository_root="$(git rev-parse --show-toplevel)"
+# Normalized the same way as the configured directories below, so the
+# containment check always compares two resolved paths.
+repository_root="$(realpath -- "$(git rev-parse --show-toplevel)")"
 selected_file="${RUNNER_TEMP}/ast-metrics-directories"
 : > "${selected_file}"
 
@@ -28,6 +31,18 @@ trim() {
     value="${value#"${value%%[![:space:]]*}"}"
     value="${value%"${value##*[![:space:]]}"}"
     printf '%s' "${value}"
+}
+
+# True when the second directory is inside the first one. '.' is the repository
+# root, so it contains every other directory.
+contains_directory() {
+    local container="$1"
+    local candidate="$2"
+    [ "${container}" = "." ] && return 0
+    case "${candidate}/" in
+        "${container}"/*) return 0 ;;
+    esac
+    return 1
 }
 
 declare -a requested=()
@@ -58,23 +73,21 @@ for requested_path in "${requested[@]}"; do
             ;;
     esac
 
-    relative_path="$(realpath --relative-to="${repository_root}" -- "${absolute_path}")"
-    [ "${relative_path}" = "" ] && relative_path="."
+    # Both paths are already canonical, so stripping the prefix is enough. A
+    # second realpath call would not be: it requires every component but the
+    # last to exist, and deleting the last project under a parent directory
+    # takes that parent away too.
+    relative_path="${absolute_path#"${repository_root}"}"
+    relative_path="${relative_path#/}"
+    [ -z "${relative_path}" ] && relative_path="."
 
     for existing_path in "${configured[@]}"; do
         if [ "${relative_path}" = "${existing_path}" ]; then
             echo "::error::Directory '${requested_path}' is configured more than once"
             exit 1
         fi
-        if [ "${relative_path}" = "." ] || [ "${existing_path}" = "." ]; then
-            echo "::error::Directory '${relative_path}' overlaps configured directory '${existing_path}'"
-            exit 1
-        fi
-        if [ "${relative_path}" != "." ] && [[ "${relative_path}/" == "${existing_path}/"* ]]; then
-            echo "::error::Directory '${relative_path}' overlaps configured directory '${existing_path}'"
-            exit 1
-        fi
-        if [ "${existing_path}" != "." ] && [[ "${existing_path}/" == "${relative_path}/"* ]]; then
+        if contains_directory "${existing_path}" "${relative_path}" \
+            || contains_directory "${relative_path}" "${existing_path}"; then
             echo "::error::Directory '${relative_path}' overlaps configured directory '${existing_path}'"
             exit 1
         fi
@@ -109,6 +122,11 @@ if [ "${EVENT_NAME}" = "pull_request" ]; then
 
     base_sha="$(git rev-parse "${resolved_base_ref}^{commit}")"
     comparison_point="$(git merge-base "${base_sha}" HEAD 2>/dev/null || printf '%s' "${base_sha}")"
+elif [ -n "${BEFORE_SHA}" ] && git rev-parse --verify --quiet "${BEFORE_SHA}^{commit}" > /dev/null; then
+    # Previous tip of the branch. It only serves the deleted directory check
+    # below: a push analyzes every configured directory anyway. Absent for a
+    # freshly created branch, where the payload carries a null SHA.
+    comparison_point="${BEFORE_SHA}"
 fi
 
 declare -a available=()
@@ -119,9 +137,13 @@ for relative_path in "${configured[@]}"; do
         continue
     fi
 
-    if [ "${EVENT_NAME}" = "pull_request" ] \
+    # A directory the analyzed change itself deleted is skipped rather than
+    # fatal, so that the same change does not have to land together with the
+    # workflow update. Once it is gone from the comparison point too, the
+    # configuration is stale and staying silent would hide the missing analysis.
+    if [ -n "${comparison_point}" ] \
         && [ "$(git cat-file -t "${comparison_point}:${relative_path}" 2>/dev/null || true)" = "tree" ]; then
-        echo "::notice::Skipping deleted directory '${relative_path}'"
+        echo "::warning::Directory '${relative_path}' was deleted; remove it from the directories input"
         continue
     fi
 
